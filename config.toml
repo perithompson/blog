@@ -38,8 +38,8 @@ copyright = "© {year}"
   iconOrder = ["Twitter", "GitHub"]
 
   # Metadata for Twitter cards, defaults to params.twitter
-  # twitterSite = "@<your handle>"
-  # twitterAuthor = "@<your handle>"
+  # twitterSite = "@perithompson"
+  # twitterAuthor = "@perithompson"
 
   # Set to true to display page title in table of contents in blog posts.
   showPageTitleInTOC = false
