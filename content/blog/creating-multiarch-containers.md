@@ -1,6 +1,6 @@
 ---
 title: "Creating Multiarch Containers"
-date: 2021-02-19T16:31:48Z
+date: 2021-03-06T16:31:48Z
 slug: "creating-multiarch-containers"
 description: "Post about creating multi architecture images for use with kubernetes"
 keywords: ["windows","multiarch","docker","buildx","kubernetes","k8s"]
