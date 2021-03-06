@@ -125,7 +125,7 @@ Take a look at this docker manifest for the pause image
 
 Even if you aren't familiar with a docker manifest, you can may be able to tell that this is actually a manifest *list*, meaning that the docker image is actually a collection of seperate manifests, each built for a different architecture or in the case of windows different OS versions...
 
-Now, you may expect that this means in our build pipeline we have a collection of computers to make this single image, which I guess you could do... but thankfully, with the magic of (qemu)[https://www.qemu.org/] and some docker trickery using something called [buildx](https://docs.docker.com/buildx/working-with-buildx/) we can actually do this on one machine!
+Now, you may expect that this means in our build pipeline we have a collection of computers to make this single image, which I guess you could do... but thankfully, with the magic of [qemu](https://www.qemu.org/) and some docker trickery using something called [buildx](https://docs.docker.com/buildx/working-with-buildx/) we can actually do this on one machine!
 
 ## Enter buildx!
 
