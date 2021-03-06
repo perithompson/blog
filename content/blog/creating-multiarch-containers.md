@@ -12,18 +12,23 @@ toc: true
 
 ## Windows Pods
 
-Ever since starting working with Kubernetes on windows, I've been struggling to get my head around working with daemon sets on hybrid clusters.  For those that don't know, this common Kubernetes functionality is used frequently for supporting kubernetes infrastructure such as network agents or even running e2e tests.  
+Ever since starting to work with with Kubernetes on Windows, I've been struggling with two problems 
+- Working with hybrid clusters
+- An recurring error `no matching manifest for windows/amd64 {version} in the manifest list entries.` 
 
 The issue with Windows is two-fold:
 
 1. Windows containers are locked to the OS version of the Host[^1]
-2. Many community manifests or chart do not currently employ node selectors meaning linux containers often try to run on Windows nodes[^2]
+2. Many community manifests or chart do not currently employ node selectors to force Pods onto matching nodes, meaning linux containers often try to run on Windows nodes[^2]
 
-This makes the experience for Windows Administrators or Developers pretty painful, especially when many Go binaries (that is common with Kubernetes services) can be cross compiled by using GOOS e.g. `GOOS=windows`. Recently, however, I was introduced to the mighty *Pause* Image.  This unassuming container is always there for you, acting as a temporary container while kubernetes prepares your application in a Pod!s Guess what it contains all the OS arch images you could ever ask for which, as of v3.4.1, will run on near enough any computer with a container runtime!  Don't believe me... run this on Windows and linux `docker run k8s.gcr.io/pause:3.4.1`.  How does this help us you ask?
+This makes the experience for Windows Administrators or Developers pretty painful, especially when many Go binaries (common with Kubernetes services) can be cross compiled by using GOOS e.g. `GOOS=windows`. 
+
+## Manifest Lists
+Recently, I was introduced to the mighty *Pause* Image.  This unassuming container is always around in kubernetes, acting as a temporary container while kubernetes prepares your application in a Pods and guess what it contains all the OS arch images you could ever ask for which, as of v3.4.1, will run on near enough any computer with a container runtime!  Don't believe me... run this on Windows and linux `docker run k8s.gcr.io/pause:3.4.1`.  How does this help us you ask?
 
 Take a look at this docker manifest for the pause image
 
-```
+``` json
 {
    "schemaVersion": 2,
    "mediaType": "application/vnd.docker.distribution.manifest.list.v2+json",
@@ -118,15 +123,19 @@ Take a look at this docker manifest for the pause image
 }
 ```
 
-Even if you aren't familiar with a docker manifest, you can see that this is actually a manifest *list*, meaning that the docker image is actually a collection of seperate manifests, each built for a different architecture or in the case of windows different OS versions...
+Even if you aren't familiar with a docker manifest, you can may be able to tell that this is actually a manifest *list*, meaning that the docker image is actually a collection of seperate manifests, each built for a different architecture or in the case of windows different OS versions...
 
-Now, you may expect that this means in our build pipeline we have a collection of computers to make this single image but thankfully, with the magic of (qemu)[https://www.qemu.org/] and some docker trickery we actually do this on one machine, which I will go through now.
-
-First we need 2 Dockerfiles one for Windows and one for linux, a program that can be cross compiled (in my example I am going to use Sonobuoy, a simple testing utility from VMware Tanzu) and a workstation setup to use docker.  The Windows dockerfile cannot run any actual windows commans so `RUN` is out of the question, but provided you have the components ready these can be injected using `ADD` or `COPY`.
+Now, you may expect that this means in our build pipeline we have a collection of computers to make this single image, which I guess you could do... but thankfully, with the magic of (qemu)[https://www.qemu.org/] and some docker trickery using something called [buildx](https://docs.docker.com/buildx/working-with-buildx/) we can actually do this on one machine!
 
 ## Enter buildx!
 
-The build process for this image is actually done by a *(link here)!!* Makefile but as that can be a little overwhelming to consume straight, I will break this down into single steps that will help you understand and replicate this for you application. Let's start with setting up our qemu image-builder and cloning our sonobuoy repo.
+Docker.com gives the following description of buildx "Docker Buildx is a CLI plugin that extends the docker command with the full support of the features provided by Moby BuildKit builder toolkit. It provides the same user experience as docker build with many new features like creating scoped builder instances and building against multiple nodes concurrently."
+
+In summary it's a suped up docker build command that lets us use a mutli arch image to build images that wouldn't usually be possible on our workstation or build server.
+
+First we need 2 Dockerfiles one for Windows and one for linux, a program that can be cross compiled (in my example I am going to use Sonobuoy, a simple testing utility from VMware Tanzu) and a workstation setup to use docker.  The Windows dockerfile cannot run any actual windows commans so `RUN` is out of the question, but provided you have the components ready these can be injected using `ADD` or `COPY`.
+
+The build process for pause is actually done by a [Makefile](https://github.com/kubernetes/kubernetes/blob/master/build/pause/Makefile) but as that can be a little overwhelming to consume straight, I will break this down how this works using [sonobuoy](https://github.com/vmware-tanzu/sonobuoy) into single steps that will help you understand and replicate this for your applications. Let's start with setting up our qemu image-builder and cloning our sonobuoy repo.
 
 ``` bash
 # Enable experimental docker CLI
@@ -153,8 +162,9 @@ chmod +x build/linux/arm64/sonobuoy
 chmod +x build/linux/amd64/sonobuoy
 ```
 
-With this in place we can now start by editing our Dockerfiles ready. For linux I am going to create images for amd64 and arm64, for windows I am going to create an image for every version from 1809 to 20H2.  The Dockerfiles here are pretty simplistic examples but they serve the purpose for understanding the process and the only changes I am making are adding some build arguments to help with my loops. 
+With this in place we can now start editing our Dockerfiles ready. For linux I am going to create images for amd64 and arm64, while for windows I am going to create an image for each version from 1809 to 20H2. 
 
+The Dockerfiles here are pretty simplistic examples but they serve the purpose for understanding the process and the only changes I am making are adding some build arguments to help me with reuse. 
 
 Dockerfile
 ```
@@ -178,9 +188,9 @@ WORKDIR /
 CMD /sonobuoy.exe aggregator --no-exit -v 3 --logtostderr
 ```
 
-Next we will start with the getting my linux images built and pushed to my docker registry.  We also want to start to prepare a space sperated string containing a list of all of the iamges that we want to include in our manifest list.
+Next we will start with the getting my linux images built and pushed to my docker registry[^3].  We also want to start to prepare a space sperated string containing a list of all of the iamges that we want to include in our manifest list.
 
-```
+``` bash
 # Use our image builder to build an image for linux/amd64
 docker buildx build --pull --output=type=registry --platform linux/amd64 \
 	-t my-repo/my-sonobuoy:v0.20-linux-amd64 \
@@ -202,14 +212,14 @@ MANIFESTLIST+="my-repo/sonobuoy:v0.20-linux-arm64v8 "
 
 So far so good, but now comes the tricky part, creating windows images on a non-windows OS!
 
-```
+``` bash
 # Set our image tags that we want to build and the servercore base image
 OSVERSIONS=("1809" "1903" "1909" "2004" "20H2")
 BASEIIMAGE="mcr.microsoft.com/windows/servercore:"
 ```
 
 Next we will build and push these images, much the same as the linux images above but for brevity, I'll create a loop...
-```
+``` bash
 for VERSION in ${OSVERSIONS[*]}
 do 
 	export BASEIIMAGE="mcr.microsoft.com/windows/nanoserver:$VERSION"
@@ -228,7 +238,7 @@ The docker manifest create command takes 2 arguments first is the manifest list 
 `my-repo/sonobuoy:v0.20-windows-amd64-1809 my-repo/sonobuoy:v0.20-windows-amd64-1903 my-repo/sonobuoy:v0.20-windows-amd64-1909 my-repo/sonobuoy:v0.20-windows-amd64-2004 my-repo/sonobuoy:v0.20-windows-amd64-20H2 my-repo/sonobuoy:v0.20-linux-arm64v8 my-repo/sonobuoy:v0.20-linux-amd64`
 
 We create our new manifest list
-```
+``` bash
 # We use --amend in case the manifest already exists
 docker manifest create --amend my-repo/sonobuoy:v0.20 $MANIFESTLIST
 ```
@@ -243,14 +253,16 @@ Options:
       --variant string        Set architecture variant
 ```
 
-So in our case we will do the following, (notice we can also set an arm64 variant)
-```
+In our case we will do the following, (notice we can also set an arm64 variant)
+
+``` bash
 docker manifest annotate --os linux --arch amd64 "my-repo/sonobuoy:v0.20" "my-repo/sonobuoy:v0.20-linux-amd64"
 docker manifest annotate --os linux --arch arm64 --variant v8 "my-repo/sonobuoy:v0.20" "my-repo/sonobuoy:v0.20-linux-arm64v8"
 ```
 
 Next we do the same for our windows images, making sure to add the windows "full" version, which we will extract from our base image
-```
+
+``` bash
 for VERSION in ${OSVERSIONS[*]}
 do 
   full_version=`docker manifest inspect mcr.microsoft.com/windows/servercore:${VERSION} | grep "os.version" | head -n 1 | awk '{print $$2}' | sed 's@.*:@@' | sed 's/"//g'`  || true; 
@@ -258,7 +270,7 @@ do
 done
 ```
 
-And that's it! Now, no matter which OS or Windows version we run the image on, we will no longer have to worry about the dreaded `no matching manifest for windows/amd64 {version} in the manifest list entries.`
+And that's it! Now, no matter which OS or Windows version we run the image on, we will no longer have to worry about the dreaded `no matching manifest for {platform} {version} in the manifest list entries.`
 
 
 
@@ -276,5 +288,6 @@ And that's it! Now, no matter which OS or Windows version we run the image on, w
 
 [^1]: This is only true when you are running Process Isolated containers, hyper-v isolation can get around this
 [^2]: To prevent this you can Taint your node or use nodeSelectors/RuntimeClasses
+[^3]: `docker manifest create` and building windows images on platorms other than Windows require an external docker registry because our docker images will not be accesible using the docker CLI, therefore we must upload them to a docker repo in order for this to work.
 
 
